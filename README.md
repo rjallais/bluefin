@@ -1,41 +1,29 @@
-# finpilot
+# dromaeosaurus
 
-A template for building custom bootc operating system images based on the lessons from [Universal Blue](https://universal-blue.org/) and [Bluefin](https://projectbluefin.io). It is designed to be used manually, but is optimized to be bootstraped by GitHub Copilot. After set up you'll have your own custom Linux.
-
-This template uses the **multi-stage build architecture** from @projectbluefin/distroless, combining resources from multiple OCI containers for modularity and maintainability. See the [Architecture](#architecture) section below for details.
-
-**Unlike previous templates, you are not modifying Bluefin and making changes.**: You are assembling your own Bluefin in the same exact way that Bluefin, Aurora, and Bluefin LTS are built. This is way more flexible and better for everyone since the image-agnostic and desktop things we love about Bluefin lives in @projectbluefin/common.
-
-Instead, you create your own OS repository based on this template, allowing full customization while leveraging Bluefin's robust build system and shared components.
-
-> Be the one who moves, not the one who is moved.
+A custom bootc operating system image based on [Bluefin](https://projectbluefin.io) designed for developers and gamers.
 
 ## What Makes this Raptor Different?
 
-Here are the changes from [Base Image Name]. This image is based on [Bluefin/Bazzite/Aurora/etc] and includes these customizations:
+Here are the changes from the upstream **Bluefin** base image (`ghcr.io/projectbluefin/bluefin:stable`):
 
 ### Added Packages (Build-time)
 
-- **System packages**: tmux, micro, mosh - [brief explanation of why]
-
-### Added Applications (Runtime)
-
-- **CLI Tools (Homebrew)**: neovim, helix - [brief explanation]
-- **GUI Apps (Flatpak)**: Spotify, Thunderbird - [brief explanation]
+- **System and Drivers**: xonedo Microsoft Xbox Wireless Dongle driver - [provides wireless Xbox controller support]
+- **VPN / Networking**: NetBird - [secure peer-to-peer mesh VPN]
+- **Developer utilities**: android-tools, bcc, bpftop, bpftrace, flatpak-builder, genisoimage, git-subtree, git-svn, iotop, nicstat, nu, numactl, podman-compose, podman-tui, sysprof, tiptop, trace-cmd, ugrep
+- **Fonts**: cascadia-code-fonts, jetbrains-mono-fonts-all, opendyslexic-fonts
+- **Virtualization**: cockpit-machines, cockpit-ostree, incus, incus-agent, incus-client, incus-selinux, libvirt-daemon-kvm, libvirt-dbus, libvirt-glib, libvirt-nss, libvirt-ssh-proxy, podman-machine, qemu-user-binfmt, qemu-user-static, virt-manager, virt-v2v, virt-viewer
+- **Shell**: starship - [cross-shell prompt configured in profile.d]
 
 ### Removed/Disabled
 
-- List anything removed from base image
+- **C/C++ Build Toolchains**: Excluded `gcc`, `clang`, `cmake`, `meson`, `ninja-build`, `valgrind`, `gdb`, etc. (install them via userspace Homebrew instead).
 
 ### Configuration Changes
 
-- Any systemd services enabled/disabled
-- Desktop environment changes
-- Other notable modifications
+- **Systemd Services**: Enabled `docker.socket`, `podman.socket`, and `netbird.service` by default.
 
-_Last updated: [date]_
-
-> Replace the placeholders above with your actual customizations whenever you add or remove packages, apps, or configuration. This section is what tells users how your image differs from the base.
+_Last updated: 2026-07-05_
 
 ## Guided Copilot Mode
 

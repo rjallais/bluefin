@@ -1,0 +1,115 @@
+[tools]
+"aqua:nushell/nushell" = "latest"
+"github:nur-taskrunner/nur" = "latest"
+fnox = "latest"
+
+# ── Public configuration ─────────────────────────────────────────────────────
+# These are committed and shared across all contributors.
+
+[env]
+IMAGE_NAME = "dromaeosaurus"
+REPO_ORGANIZATION = "rjallais"
+IMAGE_DESC = "Custom Bluefin workstation with xonedo Xbox dongle driver and developer utilities"
+IMAGE_KEYWORDS = "bootc,ublue,universal-blue"
+IMAGE_LOGO_URL = "https://avatars.githubusercontent.com/u/120078124?s=200&v=4"
+DEFAULT_TAG = "testing"
+BIB_IMAGE = "quay.io/centos-bootc/bootc-image-builder:latest"
+
+# ── Secrets ──────────────────────────────────────────────────────────────────
+# Secrets (registry tokens, signing keys, API keys) are managed by fnox.
+# Store them with:  fnox set GHCR_TOKEN <value>
+# Tasks that need secrets use `fnox exec --` to inject them at runtime.
+# See: https://github.com/jdx/fnox
+
+# ── Quality ──────────────────────────────────────────────────────────────────
+
+[tasks.check]
+description = "Validate nurfile syntax"
+run = "nur check"
+
+[tasks.lint]
+description = "Lint shell scripts with shellcheck"
+run = "nur lint"
+
+[tasks.format]
+description = "Format shell scripts with shfmt"
+run = "nur format"
+
+# ── Build ────────────────────────────────────────────────────────────────────
+
+[tasks.build]
+description = "Build container image with Podman"
+run = "nur build"
+
+[tasks.rechunk]
+description = "Rechunk image with Chunkah for smaller updates"
+run = "nur rechunk"
+
+[tasks.clean]
+description = "Remove build artifacts and outputs"
+run = "nur clean"
+
+# ── Disk images ──────────────────────────────────────────────────────────────
+
+[tasks.build-qcow2]
+description = "Build QCOW2 virtual machine disk image"
+run = "nur build-qcow2"
+
+[tasks.build-raw]
+description = "Build RAW virtual machine disk image"
+run = "nur build-raw"
+
+[tasks.build-iso]
+description = "Build ISO installer image"
+run = "nur build-iso"
+
+# ── Virtual machines ─────────────────────────────────────────────────────────
+
+[tasks.run-vm-qcow2]
+description = "Run QCOW2 image in browser-based QEMU"
+run = "nur run-vm-qcow2"
+
+[tasks.run-vm-raw]
+description = "Run RAW image in browser-based QEMU"
+run = "nur run-vm-raw"
+
+[tasks.run-vm-iso]
+description = "Run ISO image in browser-based QEMU"
+run = "nur run-vm-iso"
+
+[tasks.spawn-vm]
+description = "Launch VM via systemd-vmspawn"
+run = "nur spawn-vm"
+
+# ── Registry (requires secrets) ──────────────────────────────────────────────
+
+[tasks.push]
+description = "Push image to GHCR (requires GHCR_TOKEN via fnox)"
+run = "fnox exec -- nur push"
+
+[tasks.sign]
+description = "Sign image with cosign (requires signing key via fnox)"
+run = "fnox exec -- nur sign"
+
+# ── Rebuilds and Tagging ──────────────────────────────────────────────────────
+
+[tasks.rebuild-qcow2]
+description = "Rebuild container image, then build QCOW2 virtual machine disk image"
+run = "nur rebuild-qcow2"
+
+[tasks.rebuild-raw]
+description = "Rebuild container image, then build RAW virtual machine disk image"
+run = "nur rebuild-raw"
+
+[tasks.rebuild-iso]
+description = "Rebuild container image, then build ISO installer image"
+run = "nur rebuild-iso"
+
+[tasks.sudo-clean]
+description = "Remove build artifacts and outputs using sudo privileges"
+run = "nur sudo-clean"
+
+[tasks.tag-images]
+description = "Tag local container images with alias tags"
+run = "nur tag-images"
+

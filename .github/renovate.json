@@ -9,7 +9,7 @@
     {
       "customType": "regex",
       "description": "Track pinned container images in Justfile variables",
-      "managerFilePatterns": ["/^Justfile$/"],
+      "managerFilePatterns": ["/^nurfile$/", "/^mise.toml$/"],
       "matchStrings": [
         "export\\s+\\w+\\s+:=\\s+env\\(\"[^\"]+\",\\s+\"(?<packageName>[^\\s:@]+(?:/[^\\s:@]+)+):(?<currentValue>[^\\s@\"]+)@(?<currentDigest>sha256:[a-f0-9]+)\"\\)"
       ],

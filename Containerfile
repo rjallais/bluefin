@@ -34,47 +34,28 @@
 # See: https://docs.projectbluefin.io/contributing/ for architecture diagram
 ###############################################################################
 
-# OCI context images - imported below and pinned directly in their FROM lines.
-# The base image is pinned in the FROM line below and updated by Renovate.
-FROM ghcr.io/projectbluefin/common:latest@sha256:df2fa93dac84cda91d568bd694e5051abbbdba37bf3d54a6cc15cdc80e645e2c AS common
-FROM ghcr.io/ublue-os/brew:latest@sha256:5c5b6dea4b9faaab4d6fa81d7fc4f37f218c8a75a0839c72ae70b268bfdf4b0f AS brew
-
-# Context stage - combine local and imported OCI container resources
+# Context stage - combine local OCI container resources
 FROM scratch AS ctx
 
 COPY build /build
-COPY custom /custom
+COPY system_files /system_files
 
-# Copy from OCI containers to distinct subdirectories to avoid conflicts
-COPY --from=common /system_files /oci/common
-COPY --from=brew /system_files /oci/brew
+# Base Image - Bluefin stable
+FROM ghcr.io/projectbluefin/bluefin:stable
 
-# Base Image - GNOME included (Fedora official OSTree desktop)
-# Renovate will keep the digest pin up to date.
-FROM quay.io/fedora-ostree-desktops/silverblue:44@sha256:99394443d3a1e064a7eae9db9673e7bd36e6c34e4e29f80138767e9af6bbd1e4
-
-# Image identity - these define how bootc, fastfetch, and the ublue ecosystem
-# recognize your image. Change these to match your project name.
-ARG IMAGE_NAME="finpilot"
-ARG IMAGE_VENDOR="projectbluefin"
+# Image identity
+ARG IMAGE_NAME="dromaeosaurus"
+ARG IMAGE_VENDOR="rjallais"
 ARG UBLUE_IMAGE_TAG="stable"
-ARG BASE_IMAGE_NAME="silverblue"
-ARG FEDORA_MAJOR_VERSION="44"
+ARG BASE_IMAGE_NAME="bluefin"
+ARG FEDORA_MAJOR_VERSION="40"
 ARG VERSION=""
 
 ### MODIFICATIONS
-## Make modifications desired in your image and install packages by modifying the build scripts.
-## The following RUN directives mount the ctx stage which includes:
-##   - Local build scripts from /build
-##   - Local custom files from /custom
-##   - Files from @projectbluefin/common at /oci/common (includes branding/artwork content)
-##   - Files from @ublue-os/brew at /oci/brew
-## Scripts are run in numerical order (10-build.sh, 20-example.sh, etc.)
-
 RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=tmpfs,dst=/boot \
     --mount=type=tmpfs,dst=/tmp \
-    /ctx/build/00-image-info.sh
+    nu /ctx/build/00-image-info.nu
 
 # Set dnf options before build scripts (persists across subsequent RUN layers)
 RUN dnf5 config-manager setopt keepcache=1 install_weak_deps=0
@@ -85,30 +66,20 @@ RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=secret,id=GITHUB_TOKEN \
     --mount=type=tmpfs,dst=/boot \
     --mount=type=tmpfs,dst=/tmp \
-    /ctx/build/10-build.sh
+    nu /ctx/build/10-build.nu
 
 ### CLEANUP
-## Use Bluefin's clean-stage.sh to remove build artifacts before linting.
-## /run is deliberately not mounted as tmpfs here: clean-stage.sh must remove
-## image-layer files such as /run/dnf so bootc lint's nonempty-run-tmp check
-## passes. The script tolerates busy Buildah bind mounts while clearing contents.
 RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=tmpfs,dst=/tmp \
     --mount=type=tmpfs,dst=/boot \
-    /ctx/build/clean-stage.sh
+    nu /ctx/build/clean-stage.nu
 
 ### /opt
-## Makes /opt writeable by default. Needs to be here to make the main image
-## build strict (no /opt there). This is for downstream images/stuff like k0s.
-## If you need /opt as an immutable real directory for build-time packages
-## (e.g. google-chrome, docker-desktop), replace the next line with:
-##   RUN rm /opt && mkdir /opt
 RUN rm -rf /opt && ln -s /var/opt /opt
 
 ### INIT
-## Required for bootc images
 CMD ["/sbin/init"]
 
 ### LINTING
-## Verify final image and contents are correct. --fatal-warnings catches issues.
 RUN bootc container lint --fatal-warnings
+

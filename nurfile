@@ -1,0 +1,336 @@
+# nurfile — task runner based on Nushell
+# Env vars are injected by mise (see mise.toml [env] section).
+# Override locally via .env (gitignored) or by exporting env vars.
+
+def get-config [] {
+    {
+        image_name: ($env.IMAGE_NAME? | default "dromaeosaurus")
+        repo_org: ($env.REPO_ORGANIZATION? | default "rjallais")
+        image_desc: ($env.IMAGE_DESC? | default "Custom Bluefin workstation with xonedo Xbox dongle driver and developer utilities")
+        image_keywords: ($env.IMAGE_KEYWORDS? | default "bootc,ublue,universal-blue")
+        image_logo_url: ($env.IMAGE_LOGO_URL? | default "https://avatars.githubusercontent.com/u/120078124?s=200&v=4")
+        default_tag: ($env.DEFAULT_TAG? | default "testing")
+        bib_image: ($env.BIB_IMAGE? | default "quay.io/centos-bootc/bootc-image-builder:latest")
+    }
+}
+
+# Clean build artifacts and outputs
+def "nur clean" [] {
+    print "Cleaning build files..."
+    rm -rf _build* output previous.manifest.json changelog.md output.env
+}
+
+# Remove build artifacts and outputs using sudo privileges
+def "nur sudo-clean" [] {
+    print "Cleaning build files with sudo..."
+    if (which sudo | is-empty) {
+        rm -rf _build* output previous.manifest.json changelog.md output.env
+    } else {
+        ^sudo rm -rf _build* output previous.manifest.json changelog.md output.env
+    }
+}
+
+# Build the container image using Podman
+def "nur build" [
+    target_image?: string, # Target image name (defaults to IMAGE_NAME)
+    tag?: string          # Tag for the image (defaults to DEFAULT_TAG)
+] {
+    let config = (get-config)
+    let img = ($target_image | default $config.image_name)
+    let t = ($tag | default $config.default_tag)
+    
+    let git_clean = ((sys | get host | name) != "windows" and (do -i { git status -s } | is-empty))
+    
+    mut labels = []
+    if $git_clean {
+        let git_sha = (git rev-parse --short HEAD | str trim)
+        let repo = $"($config.repo_org)/($config.image_name)"
+        $labels = ($labels | append [
+            "--label" $"io.artifacthub.package.readme-url=https://raw.githubusercontent.com/($repo)/($git_sha)/README.md"
+            "--label" $"org.opencontainers.image.documentation=https://raw.githubusercontent.com/($repo)/($git_sha)/README.md"
+            "--label" $"org.opencontainers.image.source=https://github.com/($repo)/blob/($git_sha)/Containerfile"
+            "--label" $"org.opencontainers.image.url=https://github.com/($repo)/tree/($git_sha)"
+            "--label" $"org.opencontainers.image.version=($t).(date | format date "%Y%m%d")-($git_sha)"
+        ])
+    }
+    
+    let date_str = (date now | format date "%Y-%m-%dT%H:%M:%SZ")
+    $labels = ($labels | append [
+        "--label" "io.artifacthub.package.deprecated=false"
+        "--label" $"io.artifacthub.package.keywords=($config.image_keywords)"
+        "--label" "io.artifacthub.package.license=Apache-2.0"
+        "--label" $"io.artifacthub.package.logo-url=($config.image_logo_url)"
+        "--label" "io.artifacthub.package.prerelease=false"
+        "--label" $"org.opencontainers.image.created=($date_str)"
+        "--label" $"org.opencontainers.image.description=($config.image_desc)"
+        "--label" $"org.opencontainers.image.title=($img)"
+        "--label" $"org.opencontainers.image.vendor=($config.repo_org)"
+    ])
+    
+    let args = [
+        "build"
+        ...$labels
+        "--pull=newer"
+        "--tag" $"($img):($t)"
+        "--file" "Containerfile"
+        "."
+    ]
+    
+    print $"Running: podman ($args | str join ' ')"
+    ^podman ...$args
+}
+
+# Split the image for smaller updates (Chunkah)
+def "nur rechunk" [
+    target_image?: string,
+    tag?: string
+] {
+    let config = (get-config)
+    let img = ($target_image | default $config.image_name)
+    let t = ($tag | default $config.default_tag)
+    
+    let config_str = (podman inspect $img)
+    
+    ^podman run --rm $"--mount=type=image,src=($img),target=/chunkah" -e $"CHUNKAH_CONFIG_STR=($config_str)" quay.io/coreos/chunkah:latest build --verbose --compressed --max-layers 128 --prune /sysroot/ --label ostree.commit- --label ostree.final-diffid- --tag $"($img):($t)"
+}
+
+def rootful-load-image [target_image: string, tag: string] {
+    let uid = (id -u | str trim | into int)
+    if $uid == 0 {
+        return
+    }
+    
+    let has_root_img = (try {
+        sudo podman inspect $target_image | is-not-empty
+    } catch {
+        false
+    })
+    
+    if not $has_root_img {
+        print $"Loading ($target_image):($tag) to rootful podman storage..."
+        let tmpdir = (mktemp -d -p $env.PWD)
+        sudo env $"TMPDIR=($tmpdir)" podman image scp $"($uid)@localhost::($target_image):($tag)" $"root@localhost::($target_image):($tag)"
+        rm -rf $tmpdir
+    }
+}
+
+def build-bib [target_image: string, tag: string, type: string, config_file: string] {
+    rootful-load-image $target_image $tag
+    
+    let build_tmp = (mktemp -d -p $env.PWD)
+    let config = (get-config)
+    
+    print $"Running bootc-image-builder for ($type)..."
+    sudo podman run --rm -it --privileged --pull=newer --net=host --security-opt label=type:unconfined_t $"--volume=($env.PWD)/($config_file):/config.toml:ro" $"--volume=($build_tmp):/output" --volume=/var/lib/containers/storage:/var/lib/containers/storage $config.bib_image --type $type --use-librepo=True --rootfs=btrfs $"($target_image):($tag)"
+    
+    mkdir output
+    sudo mv -f $"($build_tmp)/*" output/
+    sudo rmdir $build_tmp
+    let user_name = (id -un | str trim)
+    sudo chown -R $"($user_name):($user_name)" output/
+}
+
+# Build QCOW2 virtual machine image
+def "nur build-qcow2" [target_image?: string, tag?: string] {
+    let config = (get-config)
+    let img = ($target_image | default $"localhost/($config.image_name)")
+    let t = ($tag | default $config.default_tag)
+    build-bib $img $t "qcow2" "iso/disk.toml"
+}
+
+# Build RAW virtual machine image
+def "nur build-raw" [target_image?: string, tag?: string] {
+    let config = (get-config)
+    let img = ($target_image | default $"localhost/($config.image_name)")
+    let t = ($tag | default $config.default_tag)
+    build-bib $img $t "raw" "iso/disk.toml"
+}
+
+# Build ISO virtual machine image
+def "nur build-iso" [target_image?: string, tag?: string] {
+    let config = (get-config)
+    let img = ($target_image | default $"localhost/($config.image_name)")
+    let t = ($tag | default $config.default_tag)
+    build-bib $img $t "iso" "iso/iso.toml"
+}
+
+# Rebuild QCOW2 virtual machine disk image (builds container image first)
+def "nur rebuild-qcow2" [target_image?: string, tag?: string] {
+    let config = (get-config)
+    let img_base = ($target_image | default $config.image_name)
+    let t = ($tag | default $config.default_tag)
+    
+    nur build $img_base $t
+    let img_full = if ($img_base | str starts-with "localhost/") { $img_base } else { $"localhost/($img_base)" }
+    nur build-qcow2 $img_full $t
+}
+
+# Rebuild RAW virtual machine disk image (builds container image first)
+def "nur rebuild-raw" [target_image?: string, tag?: string] {
+    let config = (get-config)
+    let img_base = ($target_image | default $config.image_name)
+    let t = ($tag | default $config.default_tag)
+    
+    nur build $img_base $t
+    let img_full = if ($img_base | str starts-with "localhost/") { $img_base } else { $"localhost/($img_base)" }
+    nur build-raw $img_full $t
+}
+
+# Rebuild ISO installer image (builds container image first)
+def "nur rebuild-iso" [target_image?: string, tag?: string] {
+    let config = (get-config)
+    let img_base = ($target_image | default $config.image_name)
+    let t = ($tag | default $config.default_tag)
+    
+    nur build $img_base $t
+    let img_full = if ($img_base | str starts-with "localhost/") { $img_base } else { $"localhost/($img_base)" }
+    nur build-iso $img_full $t
+}
+
+def run-vm [target_image: string, tag: string, type: string] {
+    let image_file = if $type == "iso" {
+        "output/bootiso/install.iso"
+    } else {
+        $"output/($type)/disk.($type)"
+    }
+    
+    if not ($image_file | path exists) {
+        error make {msg: $"Image file ($image_file) does not exist. Please build it first."}
+    }
+    
+    mut port = 8006
+    loop {
+        let check = (try { ^ss -tunalp | grep $":($port)" } catch { "" })
+        if ($check | is-empty) {
+            break
+        }
+        $port = $port + 1
+    }
+    
+    print $"Using Port: ($port)"
+    print $"Connect to http://localhost:($port)"
+    
+    bash -c $"sleep 10 && xdg-open http://localhost:($port) &"
+    
+    ^podman run --rm --privileged --pull=newer $"--publish=127.0.0.1:($port):8006" --env "CPU_CORES=4" --env "RAM_SIZE=8G" --env "DISK_SIZE=64G" --env "TPM=Y" --env "GPU=Y" --device=/dev/kvm $"--volume=($env.PWD)/($image_file):/boot.($type)" docker.io/qemux/qemu
+}
+
+# Run QCOW2 virtual machine in browser-based QEMU
+def "nur run-vm-qcow2" [target_image?: string, tag?: string] {
+    let config = (get-config)
+    let img = ($target_image | default $"localhost/($config.image_name)")
+    let t = ($tag | default $config.default_tag)
+    run-vm $img $t "qcow2"
+}
+
+# Run RAW virtual machine in browser-based QEMU
+def "nur run-vm-raw" [target_image?: string, tag?: string] {
+    let config = (get-config)
+    let img = ($target_image | default $"localhost/($config.image_name)")
+    let t = ($tag | default $config.default_tag)
+    run-vm $img $t "raw"
+}
+
+# Run ISO virtual machine in browser-based QEMU
+def "nur run-vm-iso" [target_image?: string, tag?: string] {
+    let config = (get-config)
+    let img = ($target_image | default $"localhost/($config.image_name)")
+    let t = ($tag | default $config.default_tag)
+    run-vm $img $t "iso"
+}
+
+# Spawn VM via systemd-vmspawn
+def "nur spawn-vm" [
+    --rebuild,
+    --type: string = "qcow2",
+    --ram: string = "6G"
+] {
+    let config = (get-config)
+    if $rebuild {
+        build-bib $"localhost/($config.image_name)" $config.default_tag $type "iso/disk.toml"
+    }
+    
+    let ram_bytes = (do -i { ^numfmt --from=iec $ram | str trim | into int } | default 6442450944)
+    
+    ^systemd-vmspawn -M "bootc-image" --console=gui --cpus=2 $"--ram=($ram_bytes)" --network-user-mode --vsock=false --pass-ssh-key=false -i (glob $"./output/*/*.($type)" | first)
+}
+
+# Check nurfile syntax and shell scripts
+def "nur check" [] {
+    print "Checking nurfile syntax..."
+    nu --ide-check 10 nurfile
+    print "Nurfile OK"
+}
+
+# Format scripts using shfmt
+def "nur format" [] {
+    if (which shfmt | is-empty) {
+        print "shfmt not found. Skipping format."
+    } else {
+        ^find . -iname "*.sh" -type f -exec shfmt --write "{}" ";"
+    }
+}
+
+# Lint scripts using shellcheck
+def "nur lint" [] {
+    if (which shellcheck | is-empty) {
+        print "shellcheck not found. Skipping lint."
+    } else {
+        ^find . -iname "*.sh" -type f -exec shellcheck "{}" ";"
+    }
+}
+
+# Push image to GHCR (secrets injected by fnox)
+def "nur push" [
+    target_image?: string,
+    tag?: string
+] {
+    let config = (get-config)
+    let img = ($target_image | default $config.image_name)
+    let t = ($tag | default $config.default_tag)
+    let registry = $"ghcr.io/($config.repo_org)"
+    let token = ($env.GHCR_TOKEN? | default "")
+
+    if ($token | is-empty) {
+        error make {msg: "GHCR_TOKEN not set. Run: fnox set GHCR_TOKEN <your-token>"}
+    }
+
+    print $"Logging in to ($registry)..."
+    $token | ^podman login ghcr.io -u $config.repo_org --password-stdin
+
+    print $"Pushing ($registry)/($img):($t)..."
+    ^podman push $"($img):($t)" $"($registry)/($img):($t)"
+}
+
+# Sign image with cosign keyless OIDC (secrets injected by fnox)
+def "nur sign" [
+    target_image?: string,
+    tag?: string
+] {
+    let config = (get-config)
+    let img = ($target_image | default $config.image_name)
+    let t = ($tag | default $config.default_tag)
+    let registry = $"ghcr.io/($config.repo_org)"
+    let full_ref = $"($registry)/($img):($t)"
+
+    if (which cosign | is-empty) {
+        error make {msg: "cosign not found. Install it: mise use -g cosign"}
+    }
+
+    print $"Signing ($full_ref)..."
+    ^cosign sign -y $full_ref
+}
+
+# Tag local container images with alias tags
+def "nur tag-images" [image_name: string, default_tag: string, tags: string] {
+    if ($image_name | is-empty) or ($default_tag | is-empty) or ($tags | is-empty) {
+        error make {msg: "Usage: nur tag-images <image_name> <default_tag> <tags>"}
+    }
+    let img_id = (podman inspect $"localhost/($image_name):($default_tag)" | from json | get 0.Id)
+    do -i { ^podman untag $"localhost/($image_name):($default_tag)" }
+    for tag in ($tags | split row " " | filter { |t| $t | is-not-empty }) {
+        ^podman tag $img_id $"($image_name):($tag)"
+    }
+    ^podman tag $img_id $"localhost/($image_name):($default_tag)"
+    print $"Tagged ($image_name) with: ($tags)"
+}
